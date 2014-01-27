@@ -251,9 +251,9 @@ int Volume::createDeviceNode(const char *path, int major, int minor) {
     return 0;
 }
 
-int Volume::formatVol(bool wipe) {
+int Volume::formatVol(bool wipe, const char* fstype) {
 
-    const char* fstype = NULL;
+    const char* fstype2 = NULL;
 
     if (getState() == Volume::State_NoMedia) {
         errno = ENODEV;
@@ -304,26 +304,29 @@ int Volume::formatVol(bool wipe) {
     sprintf(devicePath, "/dev/block/vold/%d:%d", MAJOR(deviceNodes), MINOR(deviceNodes));
 #endif
 
-    if (mDebug) {
-        SLOGI("Formatting volume %s (%s)", getLabel(), devicePath);
-    }
-
-    fstype = getFsType((const char*)devicePath);
     if (fstype == NULL) {
-        // Default to vfat
-        fstype = "vfat";
+        fstype2 = getFsType((const char*)devicePath);
+    } else {
+        fstype2 = fstype;
     }
 
-    if (strcmp(fstype, "exfat") == 0) {
-        if (Exfat::format(devicePath)) {
-            SLOGE("Failed for format (%s) as exfat", strerror(errno));
-        }
-    } else if (Fat::format(devicePath, 0, wipe)) {
+    if (mDebug) {
+        SLOGI("Formatting volume %s (%s) as %s", getLabel(), devicePath, fstype2);
+    }
+
+    if (strcmp(fstype2, "exfat") == 0) {
+        ret = Exfat::format(devicePath);
+    } else if (strcmp(fstype2, "ext4") == 0) {
+        ret = Ext4::format(devicePath, NULL);
+    } else if (strcmp(fstype2, "ntfs") == 0) {
+        ret = Ntfs::format(devicePath, wipe);
+    } else {
+        ret = Fat::format(devicePath, 0, wipe);
+    }
+
+    if (ret < 0) {
         SLOGE("Failed to format (%s)", strerror(errno));
-        goto err;
     }
-
-    ret = 0;
 
 err:
     setState(Volume::State_Idle);
@@ -357,7 +360,7 @@ bool Volume::isMountpointMounted(const char *path) {
 
 int Volume::mountVol() {
     dev_t deviceNodes[4];
-    int n, i, rc = 0;
+    int n, i = 0;
     char errmsg[255];
 
     int flags = getFlags();
@@ -468,7 +471,6 @@ int Volume::mountVol() {
         setState(Volume::State_Checking);
 
         errno = 0;
-        int gid;
 
         fstype = getFsType((const char *)devicePath);
 
@@ -638,8 +640,6 @@ int Volume::doUnmount(const char *path, bool force) {
 }
 
 int Volume::unmountVol(bool force, bool revert) {
-    int i, rc;
-
     int flags = getFlags();
     bool providesAsec = (flags & VOL_PROVIDES_ASEC) != 0;
 
